@@ -1,0 +1,52 @@
+<?php
+
+declare(strict_types=1);
+
+require_once __DIR__ . '/app/bootstrap.php';
+$user = Auth::requireLogin();
+$userId = (int)$user['id'];
+
+header('Content-Type: application/json; charset=utf-8');
+
+function upload_cover_json(int $status, array $payload): void
+{
+    http_response_code($status);
+    echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
+if (!is_post()) {
+    upload_cover_json(405, ['ok' => false, 'message' => 'Method Not Allowed']);
+}
+
+$token = $_POST['csrf_token'] ?? null;
+if (!Security::verifyCsrf(is_string($token) ? $token : null) || !Security::sameOriginRequest()) {
+    upload_cover_json(403, ['ok' => false, 'message' => 'Forbidden']);
+}
+
+$contentLength = (int)($_SERVER['CONTENT_LENGTH'] ?? 0);
+if ($contentLength > (ImageUploadService::MAX_FILE_BYTES + 1024 * 1024)) {
+    upload_cover_json(413, ['ok' => false, 'message' => '封面图片不能超过 20MB']);
+}
+
+try {
+    ImageUploadService::cleanupExpiredTemps($userId);
+    if (empty($_FILES['cover_image']) || !is_array($_FILES['cover_image'])) {
+        if ($contentLength > 0) {
+            throw new InvalidArgumentException('服务器没有收到封面图片，请检查 PHP 的 upload_max_filesize 和 post_max_size 是否已调到 25M 以上。');
+        }
+        throw new InvalidArgumentException('请选择封面图片。');
+    }
+    $result = ImageUploadService::handleUploadedImage($_FILES['cover_image'], $userId, null, ImageUploadService::ROLE_COVER, ['require_cover_800' => true]);
+    ContentAudit::event($userId, 'article_cover_upload', 'article_image', (int)$result['id'], ['role' => 1, 'size' => (int)$result['size']]);
+    upload_cover_json(200, [
+        'ok' => true,
+        'id' => (int)$result['id'],
+        'url' => $result['url'],
+        'width' => (int)$result['width'],
+        'height' => (int)$result['height'],
+    ]);
+} catch (Throwable $e) {
+    error_log('article_cover_upload_error: ' . $e->getMessage());
+    upload_cover_json(400, ['ok' => false, 'message' => $e instanceof InvalidArgumentException ? $e->getMessage() : '上传失败，请稍后重试。']);
+}

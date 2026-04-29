@@ -1,0 +1,2 @@
+ALTER TABLE articles
+    ADD COLUMN article_type TINYINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '1轮播图 2普通' AFTER category_id;
